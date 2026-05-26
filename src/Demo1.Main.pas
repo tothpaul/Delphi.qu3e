@@ -590,7 +590,7 @@ begin
     demos[currentDemo].Update;
     accumulator := accumulator - dt;
   end;
-  Label1.Caption := scene.bodyCount.toString + ' bodies';
+  Label1.Caption := scene.bodyCount.toString + ' bodies / ' + scene.islandCount.toString + ' islands';
 
   GLPanel.Invalidate;
 end;

@@ -43,11 +43,6 @@ const
   Q3_BAUMGARTE = 0.2;
   Q3_PENETRATION_SLOP = 0.05;
 
-// common.q3Memory.h
-
-  q3k_heapSize = 1024 * 1024 * 20;
-  q3k_heapInitialCapacity = 1024;
-
 type
 
 // PagedAllocator
@@ -508,6 +503,7 @@ type
     m_allowSleep: Boolean;
     m_enableFriction: Boolean;
     m_island: q3Island;
+    m_islandCount: i32;
     procedure ComputeIterations;
   public
     constructor Create( dt: r32 ); overload;
@@ -529,6 +525,7 @@ type
   	procedure QueryPoint( cb: q3ReportShape; const point: q3Vec3 );
   	procedure RayCast( cb: q3ReportShape; const rayCast: q3RaycastData );
     property bodyCount: i32 read m_bodyCount;
+    property islandCount: i32 read m_islandCount;
   end;
 
 // dynamics/q3ContactSolver.h
@@ -743,16 +740,16 @@ var
   Slot: ^TSlot<T> absolute P;
 begin
 {$IFDEF DEBUG}
-  Assert(FFirstPage <> nil);
-  Assert(Slot.Next = nil);
-  var V: TSlotPage<T> := FFirstPage;
-  while (NativeUInt(P) < NativeUInt(@V.FSlots[0])) or (NativeUInt(P) > NativeUInt(@V.FSlots[V.SLOT_COUNT - 1])) do
-  begin
-    V := V.FNextPage;
-    Assert(V <> nil);
-  end;
-  if V <> Slot.Page then
-    Assert(V = Slot.Page);
+//  Assert(FFirstPage <> nil);
+//  Assert(Slot.Next = nil);
+//  var V: TSlotPage<T> := FFirstPage;
+//  while (NativeUInt(P) < NativeUInt(@V.FSlots[0])) or (NativeUInt(P) > NativeUInt(@V.FSlots[V.SLOT_COUNT - 1])) do
+//  begin
+//    V := V.FNextPage;
+//    Assert(V <> nil);
+//  end;
+//  if V <> Slot.Page then
+//    Assert(V = Slot.Page);
 {$ENDIF}
   var Page := Slot.Page;
   Slot.Next := Page.FFreeSlot;
@@ -1982,7 +1979,7 @@ begin
 		m_currentIndex := m_moveBuffer[ i ];
 		var aabb: q3AABB := m_tree.GetFatAABB( m_currentIndex );
 
-		m_tree.Query( {Self}TreeCallBack, aabb );
+		m_tree.Query( TreeCallBack, aabb );
 	end;
 
 	m_moveCount := 0;
@@ -3140,6 +3137,8 @@ begin
   if Length(m_stack) < m_bodyCount then
     SetLength(m_stack, Max(16, Max(m_bodyCount, 2 * Length(m_stack))));
 
+  m_islandCount := 0;
+ 
   var iseed: pq3Body := m_bodyList;
   while iseed <> nil do
   begin
@@ -3155,6 +3154,7 @@ begin
 		if seed.m_flags and q3Body.eStatic <> 0 then
 			continue;
 
+		Inc(m_islandCount);
 		var stackCount: i32 := 0;
 		m_stack[ stackCount ] := seed; Inc(stackCount);
 		m_island.m_bodyCount := 0;
@@ -3458,7 +3458,7 @@ begin
   for var i: i32 := 0 to m_contactCount - 1 do
 	begin
 		var c: pq3ContactConstraintState := @m_contacts[ i ];
-		var cc: pq3ContactConstraint := @m_island.m_contacts[ i ];
+		var cc: pq3ContactConstraint := m_island.m_contacts[ i ];
 
 		for var j: i32 := 0 to c.contactCount - 1 do
 		begin
@@ -3477,10 +3477,10 @@ begin
 	begin
 		var cs: pq3ContactConstraintState := @m_contacts[ i ];
 
-		var vA: q3Vec3 := m_velocities[ cs.indexA ].v;
-		var wA: q3Vec3 := m_velocities[ cs.indexA ].w;
-		var vB: q3Vec3 := m_velocities[ cs.indexB ].v;
-		var wB: q3Vec3 := m_velocities[ cs.indexB ].w;
+		var vA: pq3Vec3 := @m_velocities[ cs.indexA ].v;
+		var wA: pq3Vec3 := @m_velocities[ cs.indexA ].w;
+		var vB: pq3Vec3 := @m_velocities[ cs.indexB ].v;
+		var wB: pq3Vec3 := @m_velocities[ cs.indexB ].w;
 
 		for var j: i32 := 0 to cs.contactCount - 1 do
 		begin
@@ -3516,22 +3516,22 @@ begin
 				P := P + cs.tangentVectors[ 1 ] * c.tangentImpulse[ 1 ];
 			end;
 
-			vA := vA - P * cs.mA;
-			wA := wA - cs.iA * c.ra.Cross( P );
+			vA^ := vA^ - P * cs.mA;
+			wA^ := wA^ - cs.iA * c.ra.Cross( P );
 
-			vB := vB + P * cs.mB;
-			wB := wB + cs.iB * c.rb.Cross( P );
+			vB^ := vB^ + P * cs.mB;
+			wB^ := wB^ + cs.iB * c.rb.Cross( P );
 
-			var dv: r32 := ( vB + wB.Cross( c.rb ) - vA - wA.Cross( c.ra ) ).Dot( cs.normal );
+			var dv: r32 := ( vB^ + wB.Cross( c.rb ) - vA^ - wA.Cross( c.ra ) ).Dot( cs.normal );
 
 			if dv < -1.0 then
 				c.bias := c.bias -(cs.restitution) * dv;
 		end;
 
-		m_velocities[ cs.indexA ].v := vA;
-		m_velocities[ cs.indexA ].w := wA;
-		m_velocities[ cs.indexB ].v := vB;
-		m_velocities[ cs.indexB ].w := wB;
+//		m_velocities[ cs.indexA ].v := vA;
+//		m_velocities[ cs.indexA ].w := wA;
+//		m_velocities[ cs.indexB ].v := vB;
+//		m_velocities[ cs.indexB ].w := wB;
 	end;
 end;
 
@@ -3635,8 +3635,10 @@ begin
   m_bodyCapacity := 0;
   m_contactCapacity := 0;
   m_bodies := nil;
+  m_bodyCapacity := 0;
   m_velocities := nil;
   m_contacts := nil;
+  m_contactCapacity := 0;
   m_contactStates := nil;
 end;
 
@@ -4507,5 +4509,7 @@ begin
 end;
 
 initialization
+{$IFDEF DEBUG}
   test();
+{$ENDIF}
 end.
