@@ -6,7 +6,7 @@ uses
   Winapi.OpenGL, Winapi.Windows, Winapi.Messages,
   System.SysUtils, System.Variants, System.Classes,
   Vcl.Graphics, Vcl.Controls, Vcl.Forms, Vcl.Dialogs, Vcl.StdCtrls, Vcl.ExtCtrls,
-  RandyGaul.qu3e, Execute.GLPanel, Vcl.AppEvnts;
+  RandyGaul.qu3e, Execute.GLPanel, Vcl.AppEvnts, Vcl.Samples.Spin;
 
 const
   FACE_COUNT = 6;  // Cube
@@ -41,6 +41,7 @@ type
   end;
 
   TDemo = class
+    procedure Setup; virtual;
     procedure Init; virtual; abstract;
     procedure Render(render: q3Render); virtual;
     procedure Update; virtual;
@@ -53,17 +54,37 @@ type
     GLPanel: TGLPanel;
     ApplicationEvents1: TApplicationEvents;
     btRayCast: TButton;
-    Label1: TLabel;
+    lbAwake: TLabel;
     btDropBoxes: TButton;
     btBoxStack: TButton;
+    lbIslands: TLabel;
+    lbBodies: TLabel;
+    cbShowAABB: TCheckBox;
+    cbShowContact: TCheckBox;
+    cbShowLinks: TCheckBox;
+    Panel2: TPanel;
+    Label1: TLabel;
+    seDT: TSpinEdit;
+    Panel3: TPanel;
+    Label2: TLabel;
+    seIter: TSpinEdit;
+    btSetup1: TButton;
+    dtSetup2: TButton;
+    Button1: TButton;
     procedure FormCreate(Sender: TObject);
     procedure ApplicationEvents1Idle(Sender: TObject; var Done: Boolean);
     procedure btTestClick(Sender: TObject);
     procedure FormDestroy(Sender: TObject);
+    procedure cbShowContactClick(Sender: TObject);
+    procedure cbShowAABBClick(Sender: TObject);
+    procedure cbShowLinksClick(Sender: TObject);
+    procedure seDTChange(Sender: TObject);
+    procedure seIterChange(Sender: TObject);
+    procedure btSetup1Click(Sender: TObject);
   private
     { Déclarations privées }
     demos: array[0..3] of TDemo;
-    start, stop: Int64;
+    freq, lastTime: Int64;
     currentDemo: Integer;
     accumulator: f32;
     cube: TGLCube;
@@ -92,6 +113,8 @@ type
     procedure SetPenColor(r, g, b: f32; a: f32 = 1.0); override;
     procedure SetPenPosition(x, y, z: f32); override;
     procedure SetScale(sx, sy, sz: f32); override;
+    procedure MoveTo(const v: q3Vec3); override;
+    procedure LineTo(const v: q3Vec3); override;
     procedure Line(x, y, z: f32); override;
     procedure DrawCube(const tx: q3Transform; const e: q3Vec3); override;
     procedure Point; override;
@@ -174,7 +197,7 @@ begin
   end;
 end;
 
-procedure TGLCube.Render;
+procedure TGLCube.Render();
 begin
   glEnable(GL_LIGHTING);
   glVertexPointer(3, GL_FLOAT, SizeOf(TVertex3D), @Vertices[0].Position);
@@ -203,6 +226,18 @@ begin
   sx_ := sx; sy_ := sy; sz_ := sz;
 end;
 
+procedure TRenderer.MoveTo(const v: q3Vec3);
+begin
+  glBegin(GL_LINES);
+  glVertex3fv(@v);
+end;
+
+procedure TRenderer.LineTo(const v: q3Vec3);
+begin
+  glVertex3fv(@v);
+  glEnd();
+end;
+
 procedure TRenderer.Line(x: f32; y: f32; z: f32);
 begin
   glBegin(GL_LINES);
@@ -220,10 +255,10 @@ procedure TRenderer.DrawCube(const tx: q3Transform; const e: q3Vec3);
 var
   M: array[0..15] of Single;
 begin
-//  if awake_ then
-//    glLightfv(GL_LIGHT0, GL_AMBIENT, @light1)
-//  else
-//    glLightfv(GL_LIGHT0, GL_AMBIENT, @light2);
+  if awake_ then
+    glLightfv(GL_LIGHT0, GL_AMBIENT, @light1)
+  else
+    glLightfv(GL_LIGHT0, GL_AMBIENT, @light2);
 
   glPushMatrix;
 
@@ -248,7 +283,7 @@ begin
   M[15] := 1;
 
   glMultMatrixf(@M);
-  Form1.cube.Render;
+  Form1.cube.Render();
   glPopMatrix;
 end;
 
@@ -278,6 +313,7 @@ type
 
 var
   dt: Single = 1/60;
+  iterations: Integer = 20;
   scene: q3Scene;
   renderer: TRenderer;
 
@@ -295,6 +331,12 @@ var
 procedure TDemo.Render(render: q3Render);
 begin
   // do nothing
+end;
+
+procedure TDemo.Setup;
+begin
+//  dt := 1/60;
+//  iterations := 20;
 end;
 
 procedure TDemo.Update;
@@ -318,8 +360,6 @@ type
 
 procedure TDropBoxes.Init;
 begin
-  acc := 0;
-
   // Create the floor
 	var bodyDef:	q3BodyDef;
   var body: pq3Body := scene.CreateBody( bodyDef );
@@ -330,6 +370,9 @@ begin
   tx.Identity;
   boxDef.Create( tx, q3Vec3.Create( 50.0, 1.0, 50.0 ) );
   body.AddBox( boxDef );
+
+  acc := 1.0;
+  Update;
 end;
 
 procedure TDropBoxes.Update;
@@ -404,7 +447,6 @@ end;
 
 procedure TRayPush.Init;
 begin
-  acc := 0;
   var bodydef: q3BodyDef;
   var body : pq3Body := scene.CreateBody(bodyDef);
 
@@ -414,6 +456,9 @@ begin
   tx.Identity;
   boxDef.Create(tx, q3Vec3.Create(50.0, 1.0, 50.0));
   body.AddBox(boxDef);
+
+  acc := 1;
+  Update;
 end;
 
 procedure TRayPush.Update;
@@ -472,8 +517,15 @@ end;
 type
   TBoxStack = class(TDemo)
    public
+     procedure Setup; override;
     procedure Init; override;
   end;
+
+procedure TBoxStack.Setup;
+begin
+  dt := 1/30;
+  iterations := 2;
+end;
 
 procedure TBoxStack.Init;
 begin
@@ -537,13 +589,46 @@ begin
     body.AddBox(boxDef);
   end;
 end;
+procedure TForm1.btSetup1Click(Sender: TObject);
+begin
+  var tag := TButton(Sender).Tag;
+  if tag > 0 then
+  begin
+    seDT.Value := tag div 100;
+    seIter.Value := tag mod 100;
+  end;
+  if currentDemo >= 0 then
+  begin
+    demos[currentDemo].Shutdown;
+    demos[currentDemo].Init;
+  end;
+end;
+
 procedure TForm1.btTestClick(Sender: TObject);
 begin
   if currentDemo >= 0 then
     Demos[currentDemo].Shutdown;
   currentDemo := TButton(Sender).Tag;
-  stop := GetTickCount;
+  QueryPerformanceCounter(lastTime);
+  Demos[currentDemo].Setup;
+  seDT.Value := Round(1/dt);
+  seIter.Value := Iterations;
   Demos[currentDemo].Init;
+end;
+
+procedure TForm1.cbShowAABBClick(Sender: TObject);
+begin
+  scene.showAABB := cbShowAABB.Checked;
+end;
+
+procedure TForm1.cbShowContactClick(Sender: TObject);
+begin
+  scene.showContact := cbShowContact.Checked;
+end;
+
+procedure TForm1.cbShowLinksClick(Sender: TObject);
+begin
+  scene.showLinks := cbShowLinks.Checked;
 end;
 
 procedure TForm1.FormCreate(Sender: TObject);
@@ -552,12 +637,14 @@ begin
   WriteLn('Hit Ctrl+C to kill the application');
   GLPanel.OnSetup := GLSetup;
   GLPanel.OnPaint := GLPaint;
-  scene := q3Scene.Create(dt);
+  scene := q3Scene.Create();
   demos[0] := TDropBoxes.Create;
   demos[1] := TRayPush.Create;
   demos[2] := TBoxStack.Create;
   demos[3] := TTest.Create;
   currentDemo := -1;
+  QueryPerformanceFrequency(freq);
+  QueryPerformanceCounter(lastTime);
 end;
 
 procedure TForm1.FormDestroy(Sender: TObject);
@@ -570,38 +657,42 @@ begin
 end;
 
 procedure TForm1.ApplicationEvents1Idle(Sender: TObject; var Done: Boolean);
+var
+  now, delta: Int64;
 begin
   if currentDemo  < 0 then
     Exit;
 
-  start := GetTickCount;
-  var time := (start - stop) / 100000;
+  QueryPerformanceCounter(now);
+  delta := now - lastTime;
+  lastTime := now;
 
-  UpdateScene(time);
+  UpdateScene(delta / freq);
+
+  Done := False;
 end;
 
 procedure TForm1.UpdateScene(time: f32);
 begin
   accumulator := accumulator + time;
-  accumulator := q3Clamp01(accumulator);
+//  accumulator := q3Clamp01(accumulator);
   while accumulator >= dt do
   begin
-    scene.Step;
+    scene.Step( dt, iterations );
     demos[currentDemo].Update;
     accumulator := accumulator - dt;
   end;
-  Label1.Caption := scene.bodyCount.toString + ' bodies / ' + scene.islandCount.toString + ' islands';
+  lbBodies.Caption := scene.bodyCount.toString + ' bodies';
+  lbIslands.Caption := scene.islandCount.toString + ' islands';
+  lbAwake.Caption := scene.awakeCount.toString + ' awake';
 
-  GLPanel.Invalidate;
+  GLPanel.Repaint;
 end;
 
 procedure TForm1.GLSetup(Sender: TObject);
 begin
   renderer := TRenderer.Create;
   cube := TGLCube.Create;
-
-  start := GetTickCount;
-  stop := start;
 
   glClearColor( 0.0, 0.0, 0.0, 0.0 );
 	glEnable( GL_CULL_FACE );
@@ -620,6 +711,16 @@ begin
 
 //  glDisable(GL_DEPTH_TEST);
 //  glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
+end;
+
+procedure TForm1.seDTChange(Sender: TObject);
+begin
+  dt := 1/seDT.Value;
+end;
+
+procedure TForm1.seIterChange(Sender: TObject);
+begin
+  iterations := seIter.Value;
 end;
 
 procedure TForm1.GLPaint(Sender: TObject);

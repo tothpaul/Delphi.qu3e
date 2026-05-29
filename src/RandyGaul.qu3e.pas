@@ -168,14 +168,17 @@ type
   pq3AABB = ^q3AABB;
 
   q3RaycastData = record
-    start: q3Vec3;
-    dir: q3Vec3;
-    t: r32;
+    start: q3Vec3;    // Beginning point of the ray
+    dir: q3Vec3;      // Direction of the ray (normalized)
+    t: r32;           // Time specifying ray endpoint
 
-    toi: r32;
-    normal: q3Vec3;
+    toi: r32;         // Solved time of impact
+    normal: q3Vec3;   // Surface normal at impact
 
     constructor Create(const startPoint, direction: q3Vec3; endPointTime: r32);
+    // Uses toi, start and dir to compute the point at toi. Should
+    // only be called after a raycast has been conducted with a
+    // return value of true.
     function GetImpactPoint: q3Vec3; inline;
   end;
   pq3RaycastData = ^q3RaycastData;
@@ -195,6 +198,8 @@ type
     procedure SetPenPosition(x, y, z: f32); virtual; abstract;
     procedure SetScale(sx, sy, sz: f32); virtual; abstract;
 
+    procedure MoveTo(const v: q3Vec3); virtual; abstract;
+    procedure LineTo(const v: q3Vec3); virtual; abstract;
     procedure Line(x, y, z: f32); virtual; abstract;
 
     procedure DrawCube(const tx: q3Transform; const e: q3Vec3); virtual; abstract;
@@ -213,21 +218,24 @@ type
       const
         Null = -1;
       var
+        // Fat AABB for leafs, bounding AABB for branches
         aabb: q3AABB;
         parent: i32;
+        // Child indices
         left: i32;
         right: i32;
         userData: Pointer;
+        // leaf = 0, free nodes = -1
         height: i32;
         function IsLeaf: Boolean;
-        property next: i32 read parent write parent; // union
+        property next: i32 read parent write parent; // union (free list)
       end;
       pNode = ^Node;
   private
     m_root: i32;
     m_nodes: TArray<Node>;
-    m_count: i32;
-    m_capacity: i32;
+    m_count: i32;       // Number of active nodes
+    m_capacity: i32;    // Max capacity of nodes
     m_freeList: i32;
     function AllocateNode: i32;
     procedure DeallocateNode(index: i32);
@@ -236,7 +244,10 @@ type
     procedure RemoveLeaf(id: i32);
     procedure ValidateStructure(index: i32);
     procedure RenderNode(render: q3Render; index: i32);
+    // Correct AABB hierarchy heights and AABBs starting at supplied
+	  // index traversing up the heirarchy
     procedure SyncHeirarchy(index: i32);
+    // Insert nodes at a given index until m_capacity into the free list
     procedure AddToFreeList(index: i32);
   public
     constructor Create;
@@ -244,8 +255,8 @@ type
     procedure Remove(id: i32);
     function Update(id: i32; const aabb: q3AABB): Boolean;
 
-    function GetUserData(id: i32): Pointer;
-    function GetFatAABB(id: i32): q3AABB;
+    function GetUserData(id: i32): Pointer; inline;
+    function GetFatAABB(id: i32): q3AABB; inline;
     procedure Render(render: q3Render);
     procedure Query(cb: q3CallBack; const aabb: q3AABB); overload;
     procedure Query(cb: q3CallBack; const rayCast: q3RaycastData); overload;
@@ -281,9 +292,11 @@ type
      destructor Destroy; override;
      procedure InsertBox(box: pq3Box; const aabb: q3AABB);
      procedure RemoveBox(box: pq3Box);
+     // Generates the contact list. All previous contacts are returned to the allocator
+     // before generation occurs.
      procedure UpdatePairs();
      procedure Update(id: i32; const aabb: q3AABB);
-     function TestOverlap(A, B: i32): Boolean;
+     function TestOverlap(A, B: i32): Boolean; inline;
    end;
 
 // dynmaics/q3Contact.h
@@ -496,20 +509,21 @@ type
     m_stack: TArray<pq3Body>;
     m_bodyAllocator: TBodyAllocator;
     m_gravity: q3Vec3;
-    m_dt: r32;
-    m_iterations: i32;
     m_base_iterations: i32;
     m_newBox: Boolean;
     m_allowSleep: Boolean;
     m_enableFriction: Boolean;
     m_island: q3Island;
     m_islandCount: i32;
-    procedure ComputeIterations;
+    m_awakeCount: i32;
+    m_showContact: Boolean;
+    m_showAABB: Boolean;
+    m_showLinks: Boolean;
   public
-    constructor Create( dt: r32 ); overload;
-    constructor Create( dt: r32; const gravity: q3Vec3; iterations: i32 = 20 ); overload;
+    constructor Create; overload;
+    constructor Create(const gravity: q3Vec3 ); overload;
 	  destructor Destroy; override;
-  	procedure Step( );
+  	procedure Step( dt: r32 = 1/60; iterations: i32 = 20 ); overload;
   	function CreateBody( const def: q3BodyDef ): pq3Body;
   	procedure RemoveBody( body: pq3Body );
 	  procedure RemoveAllBodies( );
@@ -526,6 +540,10 @@ type
   	procedure RayCast( cb: q3ReportShape; const rayCast: q3RaycastData );
     property bodyCount: i32 read m_bodyCount;
     property islandCount: i32 read m_islandCount;
+    property awakeCount: i32 read m_awakeCount;
+    property showContact: Boolean read m_showContact write m_showContact;
+    property showAABB: Boolean read m_showAABB write m_showAABB;
+    property showLinks: Boolean read m_showLinks write m_showLinks;
   end;
 
 // dynamics/q3ContactSolver.h
@@ -613,9 +631,9 @@ type
     procedure ApplyLinearImpulse(const impulse: q3Vec3);
     procedure ApplyLinearImpulseAtWorldPoint(const impulse, point: q3Vec3);
     procedure ApplyTorque(const torque: q3Vec3);
-    procedure SetToAwake;
+    procedure SetToAwake; inline;
     procedure SetToSleep;
-    function IsAwake: Boolean;
+    function IsAwake: Boolean; inline;
     function GetGravityScale: r32;
     procedure SetGravityScale(scale: r32);
     function GetLocalPoint(const p: q3Vec3): q3Vec3;
@@ -640,7 +658,7 @@ type
     function GetAngularDamping(damping: r32): r32;
     procedure SetTransform(const position: q3Vec3); overload;
     procedure SetTransform(const position, axis: q3Vec3; angle: r32); overload;
-    procedure Render(render: q3Render);
+    procedure Render(render: q3Render; showLinks: Boolean);
     function GetMass: r32;
     function GetInvMass: r32;
   end;
@@ -670,7 +688,7 @@ type
      function Raycast(const tx: q3Transform; raycast: pq3RaycastData): Boolean;
      procedure ComputeAABB(const tx: q3Transform; var aabb: q3AABB);
      procedure ComputeMass(var md: q3MassData);
-     procedure Render(const tx: q3Transform; awake: Boolean; render: q3Render);
+     procedure Render(const tx: q3Transform; awake: Boolean; render: q3Render; showLinks: Boolean);
    end;
 
   TContactConstraintAllocator = class(TPagedAllocator<q3ContactConstraint>)
@@ -1270,8 +1288,9 @@ end;
 
 procedure FattenAABB(var aabb: q3AABB);
 const
-  k_fatterner = 0.5;
+  k_fatterner = 0.1;
 begin
+  Exit;
   var v := q3Vec3.Create(k_fatterner, k_fatterner, k_fatterner);
   aabb.min := aabb.min - v;
   aabb.max := aabb.max + v;
@@ -1279,6 +1298,8 @@ end;
 
 function q3DynamicAABBTree.Node.IsLeaf: Boolean;
 begin
+  // The right leaf does not use the same memory as the userdata,
+  // and will always be Null (no children)
   Result := right = Null;
 end;
 
@@ -1345,7 +1366,7 @@ procedure q3DynamicAABBTree.Render(render: q3Render);
 begin
   if m_root <> Node.Null then
   begin
-    render.SetPenColor(0.5, 0.5, 1.0);
+    //render.SetPenColor(0.5, 0.5, 1.0);
     RenderNode(render, m_root);
   end;
 end;
@@ -1355,6 +1376,12 @@ begin
   assert((index >= 0) and (index < m_capacity));
   var n: pNode := @m_nodes[index];
   var b: pq3AABB := @n.aabb;
+
+  if n.IsLeaf then
+    render.SetPenColor(0.5, 1.0, 1.0)
+  else
+    render.SetPenColor(0.5, 0.5, 1.0);
+
 
   render.SetPenPosition(b.min.x, b.max.y, b.min.z);
 
@@ -1765,7 +1792,7 @@ begin
     begin
       if n.IsLeaf then
       begin
-        if not cb{.TreeCallBack}(id) then
+        if not cb(id) then
           Exit;
       end else begin
         stack[sp] := n.Left; Inc(sp);
@@ -1865,6 +1892,7 @@ end;
 
 function q3BroadPhase.TreeCallBack(index: i32): Boolean;
 begin
+  // Cannot collide with self
 	if index = m_currentIndex then
 		Exit(True);
 
@@ -3081,20 +3109,17 @@ begin
 	render.SetScale( 1.0, 1.0, 1.0 );
 end;
 
-constructor q3Scene.Create(dt: r32);
+constructor q3Scene.Create();
 begin
-  Create(dt, q3Vec3.Create(0.0, -9.8, 0.0));
+  Create(q3Vec3.Create(0.0, -9.8, 0.0));
 end;
 
-constructor q3Scene.Create(dt: r32; const gravity: q3Vec3; iterations: i32 = 20);
+constructor q3Scene.Create(const gravity: q3Vec3);
 begin
   m_contactManager := q3ContactManager.Create();
   m_boxAllocator := TBoxAllocator.Create;
   m_bodyAllocator := TBodyAllocator.Create;
   m_gravity := gravity;
-  m_dt := dt;
-  m_iterations := iterations;
-  m_base_iterations := m_iterations;
   m_allowSleep := True;
   m_enableFriction := True;
 end;
@@ -3107,7 +3132,7 @@ begin
   m_contactManager.Free;
 end;
 
-procedure q3Scene.Step;
+procedure q3Scene.Step( dt: r32; iterations: i32 );
 begin
 	if m_newBox then
 	begin
@@ -3118,9 +3143,12 @@ begin
 	m_contactManager.TestCollisions( );
 
   var body: pq3Body := m_bodyList;
+  m_awakeCount := 0;
   while body <> nil do
   begin
 		body.m_flags := body.m_flags and not q3Body.eIsland;
+    if body.IsAwake then
+      Inc(m_awakeCount);
     body := body.m_next;
   end;
 
@@ -3130,9 +3158,9 @@ begin
 	m_island.m_enableFriction := m_enableFriction;
 	m_island.m_bodyCount := 0;
 	m_island.m_contactCount := 0;
-	m_island.m_dt := m_dt;
+	m_island.m_dt := dt;
 	m_island.m_gravity := m_gravity;
-	m_island.m_iterations := m_iterations;
+	m_island.m_iterations := iterations;
 
   if Length(m_stack) < m_bodyCount then
     SetLength(m_stack, Max(16, Max(m_bodyCount, 2 * Length(m_stack))));
@@ -3259,14 +3287,10 @@ begin
 	m_bodyList := body;
 	Inc(m_bodyCount);
 
-  ComputeIterations;
+  if body.IsAwake then
+    Inc(m_awakeCount);
 
 	Result := body;
-end;
-
-procedure q3Scene.ComputeIterations;
-begin
-  m_iterations := Min(m_base_iterations, Max(4, Round(60 / sqrt(m_bodyCount))));
 end;
 
 procedure q3Scene.RemoveBody( body: pq3Body );
@@ -3286,8 +3310,6 @@ begin
 	Dec(m_bodyCount);
 
 	m_bodyAllocator.Release( body );
-
-  ComputeIterations;
 end;
 
 procedure q3Scene.RemoveAllBodies;
@@ -3322,7 +3344,6 @@ end;
 procedure q3Scene.SetIterations(iterations: i32);
 begin
   m_base_iterations := Max(1, iterations);
-  ComputeIterations;
 end;
 
 procedure q3Scene.SetEnableFriction(enabled: Boolean);
@@ -3335,10 +3356,13 @@ begin
   var body: pq3Body := m_bodyList;
   while body <> nil do
   begin
-    body.Render( render );
+    body.Render( render, m_showLinks);
     body := body.m_next;
   end;
-//  m_contactManager.RenderContacts( render );
+  if m_showContact then
+    m_contactManager.RenderContacts( render );
+  if m_showAABB then
+    m_contactManager.m_broadphase.m_tree.Render( render );
 end;
 
 function q3Scene.GetGravity: q3Vec3;
@@ -3724,12 +3748,14 @@ begin
 				body.m_sleepTime := body.m_sleepTime + m_dt;
 				minSleepTime := Min( minSleepTime, body.m_sleepTime );
 			end;
+
 		end;
 
 		// Put entire island to sleep so long as the minimum found sleep time
 		// is below the threshold. If the minimum sleep time reaches below the
 		// sleeping threshold, the entire island will be reformed next step
 		// and sleep test will be tried again.
+
 		if minSleepTime > Q3_SLEEP_TIME then
 		begin
 			for var i: i32 := 0 to m_bodyCount - 1 do
@@ -4069,7 +4095,7 @@ procedure q3Body.SetLinearVelocity(const v: q3Vec3);
 begin
   if m_flags and eStatic <> 0 then
     assert(false);
-  if v.Dot( v ) > 0.0 then
+  if v.Dot( v ) > Epsilon then
   begin
     SetToAwake;
   end;
@@ -4085,7 +4111,7 @@ procedure q3Body.SetAngularVelocity(const v: q3Vec3);
 begin
   if m_flags and eStatic <> 0 then
     assert(false);
-  if v.Dot( v ) > 0.0 then
+  if v.Dot( v ) > Epsilon then
   begin
     SetToAwake;
   end;
@@ -4167,13 +4193,13 @@ begin
   Result := m_angularDamping;
 end;
 
-procedure q3Body.Render(render: q3Render);
+procedure q3Body.Render(render: q3Render; showLinks: Boolean);
 begin
-  var awake := IsAwake;
+  var awake :=  m_flags and (eStatic or eAwake) = eAwake;
   var box: pq3Box := m_boxes;
   while box <> nil do
   begin
-    box.Render(m_tx, awake, render);
+    box.Render(m_tx, awake, render, showLinks);
     box := box.next;
   end;
 end;
@@ -4357,10 +4383,10 @@ begin
 	for var i: i32 := 0 to 7 do
 		v[ i ] := q3Mul( world, v[ i ] );
 
-	var min := q3Vec3.Create( Q3_R32_MAX, Q3_R32_MAX, Q3_R32_MAX );
-	var max := q3Vec3.Create( -Q3_R32_MAX, -Q3_R32_MAX, -Q3_R32_MAX );
+	var min := v[0];
+	var max := min;
 
-	for var i: i32 := 0 to 7 do
+	for var i: i32 := 1 to 7 do
 	begin
 		min := min.Min( v[ i ] );
 		max := max.Max( v[ i ] );
@@ -4407,11 +4433,31 @@ const
     2 - 1, 8 - 1, 4 - 1
   );
 
-procedure q3Box.Render( const tx: q3Transform; awake: Boolean; render: q3Render);
+procedure q3Box.Render( const tx: q3Transform; awake: Boolean; render: q3Render; showLinks : Boolean);
 begin
 	var world: q3Transform := q3Mul( tx, local );
   render.SetAwake(awake);
   Render.DrawCube(world, e);
+  if showLinks then
+  begin
+    var c := body.m_contactList;
+    if c <> nil then
+    begin
+      if body.IsAwake then
+        render.SetPenColor(1, 1, 1, 1)
+      else
+        render.SetPenColor(0.5, 0.5, 0.5, 1);
+      render.MoveTo(world.position);
+      repeat
+        if c.other.IsAwake then
+          render.SetPenColor(1, 1, 1, 1)
+        else
+          render.SetPenColor(0.5, 0.5, 0.5, 1);
+        render.LineTo(q3Mul( c.other.m_tx, c.other.m_boxes[0].local ).position);
+        c := c.next;
+      until c = nil;
+    end;
+  end;
 end;
 
 class operator q3BoxDef.Initialize(out def: q3BoxDef);
